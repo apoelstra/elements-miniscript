@@ -63,4 +63,7 @@ name = "psbt_sign_finalize"
 required-features = ["base64"]
 
 [workspace]
-members = ["bitcoind-tests", "fuzz"]
+members = ["bitcoind-tests", "fuzz", "testtx"]
+
+[patch.crates-io.simplicity-lang]
+path = "/store/home/apoelstra/code/BlockstreamResearch/rust-simplicity/pr-review"
