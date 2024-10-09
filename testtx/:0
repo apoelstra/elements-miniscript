@@ -14,21 +14,16 @@
 
 mod call_jet;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use elements_miniscript::bitcoin::secp256k1::{Keypair, Message, Secp256k1, SecretKey};
+use elements_miniscript::bitcoin::secp256k1::{Secp256k1, SecretKey};
 use elements_miniscript::bitcoin::XOnlyPublicKey;
 use elements_miniscript::Descriptor;
 use elements_miniscript::descriptor::TapTree;
 use elements_miniscript::elements::{self, AddressParams};
-use elements_miniscript::elements::taproot::{LeafVersion, TapLeafHash};
-use elements_miniscript::elements::schnorr::SchnorrSig;
-use elements_miniscript::elements::sighash::SchnorrSighashType;
 use elements_miniscript::bitcoin::hashes::Hash as _;
 use elements_miniscript::bitcoin::hex::{FromHex as _, DisplayHex as _};
 
-use simplicity::jet::Elements; 
 use simplicity::jet::elements::{ElementsEnv, ElementsUtxo}; 
 
 fn main() -> Result<(), String> {
@@ -39,16 +34,19 @@ fn main() -> Result<(), String> {
         0x07, 0x8a, 0x5a, 0x0f, 0x28, 0xec, 0x96, 0xd5,
         0x47, 0xbf, 0xee, 0x9a, 0xce, 0x80, 0x3a, 0xc0, 
     ]).unwrap();
-    // From blockstream.info -- note needs to be reversed!!
+    // From blockstream.info
     let tlbtc_assetid = elements::AssetId::from_slice(&[
-        0x49, 0x9a, 0x81, 0x85, 0x45, 0xf6, 0xba, 0xe3,
-        0x9f, 0xc0, 0x3b, 0x63, 0x7f, 0x2a, 0x4e, 0x1e,
-        0x64, 0xe5, 0x90, 0xca, 0xc1, 0xbc, 0x3a, 0x6f,
-        0x6d, 0x71, 0xaa, 0x44, 0x43, 0x65, 0x4c, 0x14, 
+        0x14, 0x4c, 0x65, 0x43, 0x44, 0xaa, 0x71, 0x6d,
+        0x6f, 0x3a, 0xbc, 0xc1, 0xca, 0x90, 0xe5, 0x64,
+        0x1e, 0x4e, 0x2a, 0x7f, 0x63, 0x3b, 0xc0, 0x9f,
+        0xe3, 0xba, 0xf6, 0x45, 0x85, 0x81, 0x9a, 0x49, 
     ]).unwrap();
     // from node
     let genesis_hash = elements::BlockHash::from_byte_array([
-        0xc1, 0xb1, 0x6a, 0xe2, 0x4f, 0x24, 0x23, 0xae, 0xa2, 0xea, 0x34, 0x55, 0x22, 0x92, 0x79, 0x3b, 0x5b, 0x5e, 0x82, 0x99, 0x9a, 0x1e, 0xed, 0x81, 0xd5, 0x6a, 0xee, 0x52, 0x8e, 0xda, 0x71, 0xa7, 
+        0xa7, 0x71, 0xda, 0x8e, 0x52, 0xee, 0x6a, 0xd5,
+        0x81, 0xed, 0x1e, 0x9a, 0x99, 0x82, 0x5e, 0x5b,
+        0x3b, 0x79, 0x92, 0x22, 0x55, 0x34, 0xea, 0xa2,
+        0xae, 0x23, 0x24, 0x4f, 0xe2, 0x6a, 0xb1, 0xc1, 
     ]);
 
     // 1. Generate address
@@ -58,9 +56,7 @@ fn main() -> Result<(), String> {
         0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80,
         0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80,
     ]).unwrap();
-    let secp = Secp256k1::new();
-    let keypair = Keypair::from_secret_key(&secp, &sk);
-    let pk = keypair.x_only_public_key().0;
+    let (pk, _parity) = sk.x_only_public_key(&Secp256k1::new());
 
     let descriptor: Descriptor<XOnlyPublicKey> = format!(
         "eltr({unspendable_key},sim{{pk({pk})}})"
@@ -72,9 +68,6 @@ fn main() -> Result<(), String> {
     };
     // FIXME file issue about returning Option<&T> rather than &Option<T>
     let taptree = tr.taptree().as_ref().unwrap();
-    let leaves: Vec<_> = taptree.iter().collect();
-    assert_eq!(leaves.len(), 1);
-
     let pol = match taptree {
         TapTree::SimplicityLeaf(ref pol) => pol,
         _ => unreachable!(),
@@ -148,35 +141,14 @@ fn main() -> Result<(), String> {
         pol.cmr(),
         tr.spend_info().control_block(
             &(
-                leaves[0].1.encode(),
-                LeafVersion::from_u8(0xbe).unwrap(), // from elements source
+                LeafVersion::from_u8(0xbe), // from elements source
             ),
         ).unwrap(),
         None,
         genesis_hash,
     );
-    let (txhash, txhashlen) = call_jet::call_jet(&txenv, Elements::SigAllHash, &[]);
-    assert_eq!(txhashlen, 256);
-    println!("Sighash: {}", txhash.as_hex());
 
-    let sig = secp.sign_schnorr(&Message::from_digest_slice(&txhash).unwrap(), &keypair);
-    let schnorr_sig = SchnorrSig {
-        sig,
-        hash_ty: SchnorrSighashType::All, // ignored
-    };
-
-    let mut sig_map = HashMap::new();
-    // nb this "all_zeros" thing, and the ignored hash type of the schnorrsighash type,
-    // are totally undocumented and weird
-    sig_map.insert((pk, TapLeafHash::all_zeros()), schnorr_sig);
-    Descriptor::<XOnlyPublicKey>::satisfy(
-        &descriptor,
-        &mut tx.input[0],
-        &sig_map,
-    ).unwrap();
-
-    println!("Satisfied tx:");
-    println!("{}", elements::encode::serialize_hex(&tx));
+    let satisfaction = descriptor.satisfy(&mut tx.input[0], &sk);
 
 
     Ok(())
